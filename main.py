@@ -47,24 +47,49 @@ async def _search_address_on_mapgeo(page: Page, address: str) -> None:
 
 
 async def _open_first_result_details(page: Page) -> None:
-    # When search returns, there’s often a right-hand list; double click item to open details
-    # We'll click the first visible result card/list item.
-    # Fallback: click the parcel highlight and click "View Details" if it appears.
-    # Wait for anything that looks like a result.
-    await page.wait_for_timeout(800)
+    """
+    Open the first search result in MapGeo, without assuming any specific street name.
+    Goal: open the details panel where "PIN" appears.
+    """
+    # Give MapGeo time to populate results
+    await page.wait_for_timeout(1200)
 
-    # Try clicking first result container
-    try:
-        # Look for a results panel item with a house icon (common in MapGeo)
-        item = page.locator("div").filter(has_text=re.compile(r"\bMANORLY\b", re.I)).first
-        if await item.is_visible(timeout=5_000):
-            await item.dblclick()
-    except:
-        pass
+    # Strategy:
+    # 1) Try clicking the first result in the results list/panel (most common)
+    # 2) If not found, click the first address-looking link
+    # 3) As a last resort, just wait for the details panel to appear (sometimes MapGeo auto-opens)
 
-    # Ensure details panel is present
-    # In many layouts, "PIN" appears in the left panel.
+    # 1) First visible "result row" style container
+    candidates = [
+        # Common patterns in MapGeo UIs (divs/rows with a link inside)
+        page.locator("div").filter(has=page.locator("a")).filter(has_text=re.compile(r"\d+\s+\w+", re.I)).first,
+        # Any link that looks like an address
+        page.locator("a").filter(has_text=re.compile(r"^\s*\d+\s+\S+", re.I)).first,
+    ]
+
+    clicked = False
+    for c in candidates:
+        try:
+            if await c.is_visible(timeout=3_000):
+                # double click often opens details reliably
+                await c.dblclick()
+                clicked = True
+                break
+        except:
+            continue
+
+    if not clicked:
+        # Try a single click as fallback
+        try:
+            link = page.locator("a").filter(has_text=re.compile(r"^\s*\d+\s+\S+", re.I)).first
+            if await link.is_visible(timeout=3_000):
+                await link.click()
+        except:
+            pass
+
+    # Now wait for details panel
     await page.wait_for_selector("text=PIN", timeout=DEFAULT_TIMEOUT_MS)
+
 
 
 async def _extract_property_links_from_details(page: Page, address: str) -> PropertyLinks:
@@ -284,3 +309,4 @@ async def download(address: str = Form(...)):
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{fn}"'},
     )
+
