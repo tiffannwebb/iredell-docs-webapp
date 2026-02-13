@@ -39,56 +39,54 @@ async def _wait_for_mapgeo_ready(page: Page) -> None:
 
 
 async def _search_address_on_mapgeo(page: Page, address: str) -> None:
+    # Wait for the quick search input
     search = page.locator('input[placeholder*="Quick Search"]')
+    await search.wait_for(state="visible", timeout=DEFAULT_TIMEOUT_MS)
+
+    # Clear + type + press Enter
     await search.click()
-    await search.fill(address)
+    await search.fill("")
+    await search.type(address, delay=25)
     await search.press("Enter")
-    await page.wait_for_timeout(1200)
+
+    # Give MapGeo time to populate results / update UI
+    await page.wait_for_timeout(1500)
+
 
 
 async def _open_first_result_details(page: Page) -> None:
     """
-    Open the first search result in MapGeo, without assuming any specific street name.
-    Goal: open the details panel where "PIN" appears.
+    More robust MapGeo result-opening logic:
+    - Prefer clicking the first *address-like link* on the page after search
+    - If that fails, try clicking the first item in a list-like panel
+    - Finally, verify we got the details panel by waiting for "PIN"
     """
-    # Give MapGeo time to populate results
-    await page.wait_for_timeout(1200)
+    # Sometimes MapGeo auto-opens details; check first
+    try:
+        await page.wait_for_selector("text=PIN", timeout=6_000)
+        return
+    except:
+        pass
 
-    # Strategy:
-    # 1) Try clicking the first result in the results list/panel (most common)
-    # 2) If not found, click the first address-looking link
-    # 3) As a last resort, just wait for the details panel to appear (sometimes MapGeo auto-opens)
+    # Try clicking the first address-looking link (most reliable clickable target)
+    address_link = page.locator("a").filter(
+        has_text=re.compile(r"^\s*\d+\s+.+", re.I)
+    ).first
 
-    # 1) First visible "result row" style container
-    candidates = [
-        # Common patterns in MapGeo UIs (divs/rows with a link inside)
-        page.locator("div").filter(has=page.locator("a")).filter(has_text=re.compile(r"\d+\s+\w+", re.I)).first,
-        # Any link that looks like an address
-        page.locator("a").filter(has_text=re.compile(r"^\s*\d+\s+\S+", re.I)).first,
-    ]
+    try:
+        await address_link.wait_for(state="visible", timeout=12_000)
+        await address_link.click(timeout=12_000)
+    except:
+        # Fallback: click first row-like element that contains an address pattern
+        row = page.locator("div").filter(
+            has_text=re.compile(r"\b\d+\s+\w+", re.I)
+        ).first
+        await row.wait_for(state="visible", timeout=12_000)
+        await row.click(timeout=12_000)
 
-    clicked = False
-    for c in candidates:
-        try:
-            if await c.is_visible(timeout=3_000):
-                # double click often opens details reliably
-                await c.dblclick()
-                clicked = True
-                break
-        except:
-            continue
-
-    if not clicked:
-        # Try a single click as fallback
-        try:
-            link = page.locator("a").filter(has_text=re.compile(r"^\s*\d+\s+\S+", re.I)).first
-            if await link.is_visible(timeout=3_000):
-                await link.click()
-        except:
-            pass
-
-    # Now wait for details panel
+    # After clicking a result, wait for details panel
     await page.wait_for_selector("text=PIN", timeout=DEFAULT_TIMEOUT_MS)
+
 
 
 
@@ -309,4 +307,5 @@ async def download(address: str = Form(...)):
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{fn}"'},
     )
+
 
